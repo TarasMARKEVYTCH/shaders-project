@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shaders THREE.js</title>
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        // Set up scene, camera, and renderer
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({antialias:true});
+        const textureLoader = new THREE.TextureLoader();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Create an ArcRotateCamera and set its position
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        camera.position.set(0, -6, 0);
+        camera.up.set(0,0,1);
+        controls.update();
+
+        const angle = 1.; //light angle (vertical)
+        const dirZ = Math.sin(angle);
+        const dirXY = Math.cos(angle);
+        let lightAngle = 0.; //horizontal
+        const lightDir = new THREE.Vector3(dirXY, 0.2, dirZ);
+        const time = new THREE.Vector2(0, 0);
+
+        // Render loop
+        const animate = function () {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+
+            lightAngle+=0.01;
+            const x = Math.cos(lightAngle);
+            const y = Math.sin(lightAngle);
+            lightDir.set(x*dirXY, y*dirXY, dirZ);
+            time.set(performance.now()/1000, 0);
+        };
+        animate();
+        renderer.setClearColor(0, 1);
+        
+        function createSphereMaterial(){
+            const emission = textureLoader.load("https://apidev.bear2b.com/media/17737864346569ba294ab135.57761033.png");
+            const normalMap = textureLoader.load("https://apidev.bear2b.com/media/2067490820657318b2070e41.75604812.jpg");
+            emission.wrapS = emission.wrapT =  normalMap.wrapS = normalMap.wrapT = THREE.RepeatWrapping;
+            emission.flipY = false;
+            const material = new THREE.ShaderMaterial( {
+
+            uniforms: {
+                lightDir: {value : lightDir},
+                camPos:{value: camera.position},
+                time:{value: time},
+                emission: {value: emission},
+                normalMap: {value: normalMap}
+            },
+            vertexShader: `
+                attribute vec3 tangent;
+                attribute vec3 bitangent;
+                varying vec3 vposition;
+                varying vec3 vnormal;
+                varying vec2 vuv;
+                varying mat3 vTBN;
+                uniform vec2 time;
+
+                void main() {
+                    vec3 pos = position;
+                    float angle = atan(position.y, position.x) / 3.1415926;
+                    pos.xyz = pos.xyz * (0.9 + abs(cos(angle * 10.8)) * 0.1);
+                    pos.z = pos.z * (1. - pow(abs(normal.z), 0.2) * 0.2);
+                    vTBN = mat3(tangent, bitangent, normal);
+                    vuv = vec2(0.6 + atan(pos.y, pos.x) / (1.1 * 3.1415926), 0.6 - asin(pos.z) / 3.1415926);
+                    vuv = uv + vec2(0.75, 0);
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+                    vposition = (modelMatrix * vec4(pos, 1.0)).xyz;
+                    vnormal = normal;
+                }
+            `,
+            fragmentShader: `
+                uniform vec3 lightDir;
+                uniform vec3 camPos;
+                uniform sampler2D emission;
+                uniform sampler2D normalMap;
+                varying vec3 vposition;
+                varying vec3 vnormal;
+                varying vec2 vuv;
+                varying mat3 vTBN;
+                void main(){
+                    vec3 viewDirection = normalize(camPos- vposition);
+                    vec3 norm = normalize(vnormal);
+                    vec3 normalEmiss = texture2D(normalMap, vuv).rgb;
+                    normalEmiss = normalEmiss * 2.0 - 1.0;
+                    normalEmiss = mix(normalEmiss, vec3(0.,0.,1.), 0.5);
+                    normalEmiss = normalize(vTBN*normalEmiss); 
+                    vec3 reflectDir = reflect(-lightDir, normalEmiss); //reflected direction
+                    float ambiant = 0.4;
+                    float diffuse = max(0., dot(norm, -lightDir));
+                    float specular= pow(max(dot(viewDirection,reflectDir),0.7), 64.);
+                    float light = max(0., dot(lightDir, norm));
+                    vec3 color = vec3(0.8, 0.5, 0.1);
+                    vec4 emiss = texture2D(emission, vuv);
+                    vec3 lightColor = emiss.rgb * (diffuse + specular+ambiant);
+                    lightColor += (1.- emiss.a) * color;
+                    gl_FragColor = vec4(lightColor, 1.);
+                }
+                `,
+                transparent:true,
+                depthWrite:true,
+            } );
+
+            return material;
+        }
+
+        function createConeMaterial(){
+            const waterTexture = textureLoader.load("https://apidev.bear2b.com/media/2642445246568c9a05118d3.87622323.jpg");
+            const waterNormal = textureLoader.load("https://apidev.bear2b.com/media/3957114716571bfe4220523.26863714.jpg");
+
+            waterTexture.wrapS = waterTexture.wrapT =  waterNormal.wrapS = waterNormal.wrapT = THREE.RepeatWrapping;
+            const material = new THREE.ShaderMaterial({
+                uniforms: {
+                    lightDir: {value : lightDir},
+                    camPos:{value: camera.position},
+                    waterTexture:{value: waterTexture},
+                    waterNormal:{value: waterNormal},
+                    time:{value: time},
+                },
+                vertexShader: `
+                    attribute vec3 tangent;
+                    attribute vec3 bitangent;
+                    varying vec2 vuv;
+                    varying vec3 vposition;
+                    varying vec3 vnormal;
+                    varying mat3 vTBN;
+                    uniform vec2 time;
+
+                    void main(){
+                        vec3 pos = position;
+                        vuv = uv;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4( pos, 1.0 );
+                        vTBN = mat3(tangent, bitangent, normal);
+                        vnormal = normal; 
+                        vposition = (modelMatrix * vec4(position, 1.0)).xyz;
+                    }
+                `,
+                fragmentShader: `
+                    uniform vec3 lightDir;
+                    uniform vec3 camPos;
+                    uniform sampler2D waterTexture;
+                    uniform sampler2D waterNormal;
+                    varying vec2 vuv;
+                    varying vec3 vnormal;
+                    varying vec3 vposition;
+                    varying mat3 vTBN;
+                    uniform vec2 time;
+                    vec4 getEnvAt(vec3 dir){ //dir should be normalized
+                        vec2 uv = vec2( atan(dir.y, dir.x) /2. / 3.1415926 +0.5, dir.z*0.5+0.5 );
+                        return texture2D(waterTexture, uv);
+                    }
+                    void main(){
+                        vec3 viewDirection = normalize(camPos-vposition);
+                        vec3 norm = texture2D(waterNormal, vuv + vec2(time.x * 0.03, 0.)).rgb;
+                        vec3 norm2 = texture2D(waterNormal, vuv + vec2(0., time.x * 0.05)).rgb;
+                        norm = norm * 2.0 - 1.0;
+                        norm2 = norm2 * 2.0 - 1.0;
+                        
+                        vec3 nor = mix(normalize(norm),normalize(norm2), 0.5); //local normal
+                        nor = normalize(vTBN * nor);
+                        float fresnel = 1. - max(0., dot(viewDirection, nor));
+                        vec3 refractD = refract(-viewDirection, nor, 0.64); //1./1.54 //for air -> water
+                        vec3 reflectD = reflect(-viewDirection, nor);
+                        vec3 reflectDir = reflect(-lightDir, nor);
+                        float spec = pow(max(dot(viewDirection, reflectDir), 0.0), 64.);
+                        vec4 refractColor = getEnvAt(refractD) *vec4(0.5, 0.8, 1., 0.8);
+                        vec4 reflectColor = getEnvAt(reflectD);
+                        vec4 outColor = mix(refractColor, reflectColor, fresnel);
+                        outColor = mix(outColor, vec4(1.), spec);
+                        gl_FragColor = outColor;
+                    }   
+                `,
+                transparent : true
+            });
+
+            return material;
+        }       
+
+        function createTorusMaterial(){
+            const white = textureLoader.load("https://apidev.bear2b.com/media/85496736865731ff651d979.98125746.jpg");
+            const black = textureLoader.load("https://apidev.bear2b.com/media/35288715065732028d58e02.38822846.jpg");
+            const material = new THREE.ShaderMaterial( {
+
+                uniforms: {
+                    lightDir: {value : lightDir},
+                    camPos:{value: camera.position},
+                    white:{value: white},
+                    black:{value: black},
+                },
+
+                vertexShader: `
+                    attribute vec3 tangent;
+                    attribute vec3 bitangent;
+                    varying vec2 vuv;
+                    varying vec3 pos;
+
+                    void main(){
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+                        vuv = uv;
+                        pos = position;
+                    }
+                `,
+                fragmentShader: `
+                    uniform vec3 lightDir;
+                    uniform vec3 camPos;
+                    uniform sampler2D white;
+                    uniform sampler2D black;
+                    varying vec2 vuv;
+                    varying vec3 pos;
+
+                    void main(){
+                        vec3 whiteC = texture2D(white, vuv).rgb;
+                        vec3 blackC = texture2D(black, vuv).rgb;
+                        float h = mod(floor(vuv.x*10.), 2.);
+                        float v = mod(floor(vuv.y*10.), 2.);
+                        float f = mod(h+v, 2.);
+                        float x = mod(floor(pos.x/10.), 2.);
+                        float y = mod(floor(pos.y/10.), 2.);
+                        float z = mod(floor(pos.z/10.), 2.);
+                        f = mod(x+y+z, 2.);
+                        vec3 color = mix(whiteC, blackC, f);
+                        gl_FragColor = vec4(color, 1.);
+                    }    
+                `,
+            } );
+
+            return material;
+        }
+
+
+        function createMaterial4(){
+            const albedoPebble = "https://apidev.bear2b.com/media/630453928652ac98412e3b3.06516944.png";
+            const normalPebble = "https://apidev.bear2b.com/media/62717357652b81a70815d4.69319366.png";
+            const albedoTexture = textureLoader.load(albedoPebble );
+            const normalTexture = textureLoader.load(normalPebble );
+
+            const material = new THREE.ShaderMaterial( {
+
+                uniforms: {
+                    normalTex:{value: normalTexture},
+                    albedoTex:{value: albedoTexture},
+                    lightDir: {value : lightDir},
+                    camPos: {value : camera.position}
+                },
+
+                vertexShader: `
+                    attribute vec3 tangent;
+                    attribute vec3 bitangent;
+
+                    varying mat3 vTBN;
+                    varying vec2 vUV;
+                    varying vec3 vpos;
+                    void main(){
+                        vTBN = mat3(
+                            tangent,
+                            bitangent,
+                            normal
+                        );
+                        vUV = uv;
+                        vpos = (modelMatrix * vec4(position, 1.)).xyz;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+                    }
+                `,
+                fragmentShader: `
+                    varying mat3 vTBN;
+                    varying vec2 vUV;
+                    varying vec3 vpos;
+                    uniform sampler2D normalTex;
+                    uniform sampler2D albedoTex;
+                    uniform vec3 lightDir;
+                    uniform vec3 camPos;
+                    void main(){
+                        vec3 normal = texture2D(normalTex, vUV).rgb;
+                        normal = normal * 2.0 - 1.0;
+                        normal = mix(normal, vec3(0.,0.,1.), 0.15);
+                        normal = normalize(vTBN * normal); 
+                        float light = max(0., dot(lightDir, normal));
+                        vec3 viewDir = normalize(camPos - vpos);
+                        vec3 reflectDir = reflect(-lightDir, normal);
+                        float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.);
+                        vec3 color = texture2D(albedoTex, vUV).rgb; //vec3(1., 0.8, 0.);
+                        color.rgb = color.rgb*(light+0.3+spec);
+                        gl_FragColor = vec4(color, 1.);
+                    }    
+                `,
+            } );
+
+            return material;
+        }
+
+        const norm = new THREE.Vector3();
+        const tan = new THREE.Vector3();
+        function computeBitangent(geometry){
+            const normals = geometry.attributes.normal.array;
+            const tangent = geometry.attributes.tangent.array;
+            const biTangent = new Float32Array(normals.length);
+            for(let i=0;i<normals.length;i+=3){
+                tan.set(tangent[i], tangent[i+1], tangent[i+2])
+                norm.set(normals[i], normals[i+1], normals[i+2])
+                norm.cross(tan);
+                biTangent[i] = norm.x;
+                biTangent[i+1] = norm.y;
+                biTangent[i+2] = norm.z;
+            }
+            geometry.setAttribute( 'bitangent', new THREE.BufferAttribute(biTangent, 3));
+        }
+
+        function createGeometryCone(radius, height, vertex){
+            const geometry = new THREE.BufferGeometry();
+            const position = [];
+            const uv = [];
+            const normals = [];
+            const index = [];
+            const angle = Math.atan(height/radius);
+            const dz = Math.sin(angle);
+            const z = Math.cos(angle);
+            const zs = [0, 0.5, 0.75, 0.875, 0.9375, 0.97, 1];
+            const sep = zs.length;
+            for(var i=0; i<vertex+1; i++){
+                for(var j=0; j<sep; j++){
+                    let angle = i*Math.PI*2/vertex;
+                    let y = Math.sin(angle);
+                    let x = Math.cos(angle);
+                    const vz = zs[j];
+                    const mz = 1-vz;
+                    position.push(x*radius*mz, y*radius*mz, vz*height);
+                    normals.push(x*dz, y*dz, z);
+                    uv.push(i/vertex, 1-vz);
+                    if(i && j){
+                        const ind = i*(sep) + j;
+                        index.push(ind, ind-sep, ind-sep-1, ind-1, ind, ind-sep-1)
+                    }
+                }
+                
+            }
+            geometry.setAttribute( 'position', new THREE.BufferAttribute(new Float32Array(position), 3));
+            geometry.setAttribute( 'normal', new THREE.BufferAttribute(new Float32Array(normals), 3));
+            geometry.setAttribute( 'uv', new THREE.BufferAttribute(new Float32Array(uv), 2));
+            geometry.setIndex(index);
+            geometry.computeTangents();
+            computeBitangent(geometry);
+            return geometry
+        }
+
+        function createGeometryTorus(radius1, radius2, vertex1, vertex2){
+            const geometry = new THREE.BufferGeometry();
+            const position = [];
+            const uv = [];
+            const normals = [];
+            const index = [];
+            for(var i=0; i<vertex1+1; i++){
+                const angle = i*Math.PI*2/vertex1;
+                const y = Math.sin(angle);
+                const x = Math.cos(angle);
+                const u = i/vertex1;
+                for(var j=0; j<vertex2+1; j++){
+                    const teta = j*Math.PI*2/vertex2;
+                    const d = Math.cos(teta);
+                    const x2 = d*x;
+                    const y2 = d*y;
+                    const z2 = Math.sin(teta);
+                    position.push(x*radius1 + x2*radius2, y*radius1 + y2*radius2, z2*radius2);
+                    normals.push(x2, y2, z2);
+                    uv.push(u, j/vertex2);
+                    if(i && j){
+                        const ind = i*(vertex1+1) + j;
+                        index.push(ind-1, ind, ind-vertex1-1, ind-vertex1-2, ind-1, ind-vertex1-1)
+                    }
+                }
+            }
+            geometry.setAttribute( 'position', new THREE.BufferAttribute(new Float32Array(position), 3));
+            geometry.setAttribute( 'normal', new THREE.BufferAttribute(new Float32Array(normals), 3));
+            geometry.setAttribute( 'uv', new THREE.BufferAttribute(new Float32Array(uv), 2));
+            geometry.setIndex(index);
+            geometry.computeTangents();
+            computeBitangent(geometry);
+            return geometry
+        }
+
+        function createGeometrySphere(radius, vertexColumns, vertexRow){
+            const geometry = new THREE.BufferGeometry();
+            const position = [];
+            const uv = [];
+            const normals = [];
+            const index = [];
+            for(var i=0; i<vertexRow+1; i++){
+                const angle = i*Math.PI/vertexRow;
+                const rad = Math.sin(angle);
+                const z = Math.cos(angle);
+                const u = i/vertexRow;
+                for(var j=0; j<vertexColumns+1; j++){
+                    const teta = j*Math.PI*2/vertexColumns;
+                    const cos = Math.cos(teta);
+                    const sin = Math.sin(teta);
+                    const x = cos*rad;
+                    const y = sin*rad;
+                    position.push(x*radius, y*radius, z*radius);
+                    normals.push(x, y, z);
+                    uv.push(j/vertexColumns, u);
+                    if(i && j){
+                        const ind = i*(vertexColumns+1) + j;
+                        index.push(ind-1, ind, ind-vertexColumns-1, ind-vertexColumns-2, ind-1, ind-vertexColumns-1)
+                    }
+                }
+            }
+            geometry.setAttribute( 'position', new THREE.BufferAttribute(new Float32Array(position), 3));
+            geometry.setAttribute( 'normal', new THREE.BufferAttribute(new Float32Array(normals), 3));
+            geometry.setAttribute( 'uv', new THREE.BufferAttribute(new Float32Array(uv), 2));
+            geometry.setIndex(index);
+            geometry.computeTangents();
+            computeBitangent(geometry);
+            return geometry
+        }
+
+        const scaling = 0.01;
+        const sphere = createGeometrySphere(100*scaling, 32, 16);
+        const torus = createGeometryTorus(70*scaling, 30*scaling, 32, 32);
+        const cone = createGeometryCone(100*scaling, 120*scaling, 128);
+        const matTorus = createTorusMaterial();
+        const matCone = createConeMaterial();
+        const matSphere = createSphereMaterial();
+
+        const meshSphere = new THREE.Mesh(sphere, matSphere);
+        meshSphere.position.set(-250*scaling, 0, 0);
+        meshSphere.rotation.set(0, (-180 * Math.PI) / 180, (-120 * Math.PI) / 180); //compensate webAR rotation
+        const meshTorus = new THREE.Mesh(torus, matTorus);
+        meshTorus.position.set(250*scaling, 0, 0);
+        const meshCone = new THREE.Mesh(cone, matCone);
+        meshCone.position.set(0, 0, 0);
+
+        scene.add(meshSphere);
+        scene.add(meshTorus);
+        scene.add(meshCone);
+
+        //create the UI
+        const select = document.createElement("select");
+
+        Object.entries({ 
+            all : "All",
+            shader1: "Pumpkin",
+            shader2: "Water",
+            shader3: "Chessboard",
+            shader4: "Stones"
+        }).forEach(([key, value])=>{
+            const option = document.createElement("option");
+            option.value = key;
+            option.innerText = value;
+            if(key=="all"){option.selected = true;}
+            select.appendChild(option);
+        })
+
+        const mat4 = createMaterial4();
+
+        select.setAttribute("style", "position:absolute;top:1em;right:1em;")
+        select.addEventListener("change",()=>{
+            switch(select.value){
+                case "shader4":
+                    meshTorus.material = meshCone.material = meshSphere.material = mat4;
+                    break;
+                case "shader1":
+                    meshTorus.material = meshCone.material = meshSphere.material = matSphere;
+                    break;
+                case "shader2":
+                    meshTorus.material = meshCone.material = meshSphere.material = matCone;
+                    break;
+                case "shader3":
+                    meshTorus.material = meshCone.material = meshSphere.material = matTorus;
+                    break;
+                case "all":
+                    meshTorus.material = matTorus;
+                    meshCone.material = matCone;
+                    meshSphere.material = matSphere;
+                    break;
+                default:
+                    break;
+            }
+        })
+        document.body.appendChild(select);
+    </script>
+</body>
+</html>
